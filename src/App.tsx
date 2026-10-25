@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type PointerEvent } from 'react'
 import { io, type Socket } from 'socket.io-client'
 import {
-  ArrowDownToLine, ArrowLeft, ArrowUpRight, Check, CheckCheck, Copy, FileText, Files,
+  ArrowDownToLine, ArrowLeft, ArrowUpRight, Check, CheckCheck, Copy, Eye, EyeOff, FileText, Files,
   Headphones, Link2, LogOut, MessageCircle, Mic, MicOff, MonitorUp, MoreHorizontal, Moon,
   Paperclip, Pencil, Plus, Search, Send, ShieldCheck, Smile, Sparkles, Sun, Users, Video, VideoOff,
   X, Phone, UserRoundPlus,
@@ -42,6 +42,7 @@ function App() {
   const [user, setUser] = useState<User | null>(null)
   const [authReady, setAuthReady] = useState(false)
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
+  const [showPassword, setShowPassword] = useState(false)
   const [authError, setAuthError] = useState('')
   const [authBusy, setAuthBusy] = useState(false)
   const [roomId, setRoomId] = useState('')
@@ -151,7 +152,7 @@ function App() {
             <p className="form-subtitle">{authMode === 'login' ? 'Sign in to pick up where you left off.' : 'Start bringing your team a little closer.'}</p>
             {authMode === 'register' && <label>Your name<input name="name" placeholder="Alex Morgan" autoComplete="name" minLength={2} maxLength={60} required /></label>}
             <label>Email address<input name="email" type="email" placeholder="you@company.com" autoComplete="email" maxLength={254} required /></label>
-            <label>Password<input name="password" type="password" placeholder="At least 8 characters" autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} minLength={8} maxLength={128} required /></label>
+            <label>Password<div className="password-input-wrap"><input name="password" type={showPassword ? 'text' : 'password'} placeholder="At least 8 characters" autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} minLength={8} maxLength={128} required /><button type="button" className="password-toggle" onClick={() => setShowPassword((visible) => !visible)} aria-label={showPassword ? 'Hide password' : 'Show password'} title={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOff size={18} /> : <Eye size={18} />}</button></div></label>
             {authError && <div className="inline-error" role="alert">{authError}</div>}
             <button className="primary-button auth-submit" disabled={authBusy}>{authBusy ? 'One moment…' : authMode === 'login' ? 'Sign in' : 'Create account'}<ArrowUpRight size={17} /></button>
             <div className="auth-switch"><span>{authMode === 'login' ? 'New to Gather?' : 'Already have an account?'}</span><button type="button" className="text-button" onClick={() => { setAuthMode(authMode === 'login' ? 'register' : 'login'); setAuthError('') }}>{authMode === 'login' ? 'Create account' : 'Sign in'}</button></div>

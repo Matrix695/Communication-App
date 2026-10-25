@@ -125,3 +125,9 @@
 
 [data-theme="dark"] .upload-button,[data-theme="dark"] .empty-art,[data-theme="dark"] .file-icon,[data-theme="dark"] .idea-icon,[data-theme="dark"] .join-icon{background:#3a3153;color:#c0b5ff}
 [data-theme="dark"] .control-off{background:#3b252d;color:#ff9aaa;border-color:#633743}
+.password-input-wrap{position:relative;width:100%;display:flex;align-items:center}
+.password-input-wrap input{padding-right:46px!important}
+.password-toggle{position:absolute;right:7px;width:34px;height:34px;display:grid;place-items:center;border:0;border-radius:7px;background:transparent;color:#777282}
+.password-toggle:hover{background:#f0edff;color:#6049d8}
+[data-theme="dark"] .password-toggle{color:#b5afc1}
+[data-theme="dark"] .password-toggle:hover{background:#3a3153;color:#c0b5ff}
