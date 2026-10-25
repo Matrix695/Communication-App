@@ -39,7 +39,10 @@ function App() {
   const [authError, setAuthError] = useState('')
   const [authBusy, setAuthBusy] = useState(false)
   const [roomId, setRoomId] = useState('')
+  const [inviteLink, setInviteLink] = useState('')
   const [joinCode, setJoinCode] = useState('')
+  const [inviteCode, setInviteCode] = useState('')
+  const [joinInviteCode, setJoinInviteCode] = useState('')
   const [roomError, setRoomError] = useState('')
 
   useEffect(() => {
@@ -51,8 +54,8 @@ function App() {
 
   useEffect(() => {
     const invitedRoom = new URLSearchParams(window.location.search).get('room')
-    if (invitedRoom && /^[a-zA-Z0-9_-]{3,64}$/.test(invitedRoom)) setRoomId(invitedRoom)
-  }, [user])
+    if (invitedRoom && /^[a-zA-Z0-9_-]{3,64}$/.test(invitedRoom)) setJoinCode(invitedRoom)
+  }, [])
 
   const authenticate = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -83,13 +86,35 @@ function App() {
     setRoomId('')
   }
 
-  const createRoom = () => { setRoomError(''); setRoomId(crypto.randomUUID().replaceAll('-', '').slice(0, 12)) }
-  const joinRoom = (event: FormEvent<HTMLFormElement>) => {
+  const createRoom = async () => {
+    setRoomError('')
+    try {
+      const room = await request<{ roomId: string; inviteCode: string; inviteLink: string }>('/api/rooms', { method: 'POST' })
+      setInviteLink(room.inviteLink)
+      setInviteCode(room.inviteCode)
+      setRoomId(room.roomId)
+    } catch (error) {
+      setRoomError(error instanceof Error ? error.message : 'Unable to create the meeting.')
+    }
+  }
+  const joinRoom = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const code = joinCode.trim()
     if (!/^[a-zA-Z0-9_-]{3,64}$/.test(code)) { setRoomError('Enter a valid room code.'); return }
+    if (!/^[a-fA-F0-9]{12}$/.test(joinInviteCode.trim())) { setRoomError('Enter the 12-character meeting invite code.'); return }
     setRoomError('')
-    setRoomId(code)
+    try {
+      await request('/api/rooms/join', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId: code, inviteCode: joinInviteCode.trim() }),
+      })
+      setInviteLink(`${window.location.origin}/?room=${encodeURIComponent(code)}`)
+      setInviteCode(joinInviteCode.trim().toUpperCase())
+      setRoomId(code)
+    } catch (error) {
+      setRoomError(error instanceof Error ? error.message : 'Unable to join the meeting.')
+    }
   }
 
   if (!authReady) return <div className="loading-screen"><span className="brand-mark"><Sparkles size={20} /></span></div>
@@ -108,7 +133,6 @@ function App() {
           <div className="decor decor-one" /><div className="decor decor-two" />
         </section>
         <section className="auth-form-wrap">
-          <div className="auth-switch"><span>{authMode === 'login' ? 'New to Gather?' : 'Already have an account?'}</span><button className="text-button" onClick={() => { setAuthMode(authMode === 'login' ? 'register' : 'login'); setAuthError('') }}>{authMode === 'login' ? 'Create account' : 'Sign in'}</button></div>
           <form className="auth-form" onSubmit={authenticate}>
             <span className="eyebrow">YOUR SPACE IS READY</span>
             <h2>{authMode === 'login' ? 'Welcome back' : 'Create your account'}</h2>
@@ -118,6 +142,7 @@ function App() {
             <label>Password<input name="password" type="password" placeholder="At least 8 characters" autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} minLength={8} maxLength={128} required /></label>
             {authError && <div className="inline-error" role="alert">{authError}</div>}
             <button className="primary-button auth-submit" disabled={authBusy}>{authBusy ? 'One moment…' : authMode === 'login' ? 'Sign in' : 'Create account'}<ArrowUpRight size={17} /></button>
+            <div className="auth-switch"><span>{authMode === 'login' ? 'New to Gather?' : 'Already have an account?'}</span><button type="button" className="text-button" onClick={() => { setAuthMode(authMode === 'login' ? 'register' : 'login'); setAuthError('') }}>{authMode === 'login' ? 'Create account' : 'Sign in'}</button></div>
             <div className="auth-note"><ShieldCheck size={15} /> Your conversations stay yours.</div>
           </form>
           <span className="auth-copyright">© 2026 Gather · Made for people doing good things.</span>
@@ -126,18 +151,20 @@ function App() {
     )
   }
 
-  if (roomId) return <MeetingRoom user={user} roomId={roomId} onLeave={() => setRoomId('')} onSignOut={signOut} />
+  if (roomId) return <MeetingRoom user={user} roomId={roomId} inviteCode={inviteCode} inviteLink={inviteLink} onLeave={() => setRoomId('')} onSignOut={signOut} />
 
-  return <Messenger user={user} onSignOut={signOut} onStartCall={createRoom} onJoinRoom={joinRoom} joinCode={joinCode} setJoinCode={setJoinCode} roomError={roomError} />
+  return <Messenger user={user} onSignOut={signOut} onStartCall={createRoom} onJoinRoom={joinRoom} joinCode={joinCode} setJoinCode={setJoinCode} joinInviteCode={joinInviteCode} setJoinInviteCode={setJoinInviteCode} roomError={roomError} />
 }
 
-function Messenger({ user, onSignOut, onStartCall, onJoinRoom, joinCode, setJoinCode, roomError }: {
+function Messenger({ user, onSignOut, onStartCall, onJoinRoom, joinCode, setJoinCode, joinInviteCode, setJoinInviteCode, roomError }: {
   user: User
   onSignOut: () => void
   onStartCall: () => void
   onJoinRoom: (event: FormEvent<HTMLFormElement>) => void
   joinCode: string
   setJoinCode: (code: string) => void
+  joinInviteCode: string
+  setJoinInviteCode: (code: string) => void
   roomError: string
 }) {
   const [conversations, setConversations] = useState<Conversation[]>([])
@@ -258,7 +285,7 @@ function Messenger({ user, onSignOut, onStartCall, onJoinRoom, joinCode, setJoin
         <div className="conversation-list">
           {query.trim().length >= 2 ? contacts.length ? contacts.map((contact) => <button className="conversation-row contact-result" key={contact.id} onClick={() => void startConversation(contact)} disabled={busy}><span className="conversation-avatar">{initials(contact.name)}</span><span className="conversation-copy"><b>{contact.name}</b><small>{contact.email}</small></span><MessageCircle size={17} /></button>) : <div className="list-hint">No people found.</div> : loading ? <div className="list-hint">Loading your chats…</div> : conversations.length ? conversations.map((item) => <button className={`conversation-row ${item.id === activeId ? 'active' : ''}`} key={item.id} onClick={() => openConversation(item.id)}><span className="conversation-avatar">{initials(conversationName(item))}</span><span className="conversation-copy"><b>{conversationName(item)}</b><small>{item.lastMessage || 'Say hello 👋'}</small></span><span className="conversation-meta"><time>{timeLabel(item.lastMessageAt)}</time>{item.unread > 0 && <i>{item.unread}</i>}</span></button>) : <div className="list-hint">No chats yet. Search by name or email to start one.</div>}
         </div>
-        <div className="sidebar-meeting"><div className="sidebar-meeting-head"><span><Video size={15} /> MEETINGS</span><span className="secure-label"><span className="online-dot" /> Ready</span></div><button className="start-meeting-button" onClick={onStartCall}><Video size={16} /> Start a meeting</button><form className="join-meeting-form" onSubmit={onJoinRoom}><input value={joinCode} onChange={(event) => setJoinCode(event.target.value)} placeholder="Meeting code" aria-label="Meeting code" maxLength={64} /><button title="Join meeting" aria-label="Join meeting"><ArrowUpRight size={16} /></button></form>{roomError && <small className="meeting-error">{roomError}</small>}</div>
+        <div className="sidebar-meeting"><div className="sidebar-meeting-head"><span><Video size={15} /> MEETINGS</span><span className="secure-label"><span className="online-dot" /> Ready</span></div><button className="start-meeting-button" onClick={onStartCall} title="Create a meeting and host it with a private invite code"><Video size={16} /> Host a meeting</button><small className="meeting-create-note">A private invite link and code are generated automatically.</small><form className="join-meeting-form" onSubmit={onJoinRoom}><input value={joinCode} onChange={(event) => setJoinCode(event.target.value)} placeholder="Meeting ID from link" aria-label="Meeting ID from invite link" maxLength={64} required /><input value={joinInviteCode} onChange={(event) => setJoinInviteCode(event.target.value.replace(/[^a-fA-F0-9]/g, '').slice(0, 12))} placeholder="12-character invite code" aria-label="Meeting invite code" maxLength={12} required /><button title="Join meeting" aria-label="Join meeting"><ArrowUpRight size={16} /></button></form>{roomError && <small className="meeting-error">{roomError}</small>}</div>
       </aside>
       <section className="messenger-main">
         {activeConversation && activePeer ? <>
@@ -272,7 +299,7 @@ function Messenger({ user, onSignOut, onStartCall, onJoinRoom, joinCode, setJoin
   )
 }
 
-function MeetingRoom({ user, roomId, onLeave, onSignOut }: { user: User; roomId: string; onLeave: () => void; onSignOut: () => void }) {
+function MeetingRoom({ user, roomId, inviteCode, inviteLink, onLeave, onSignOut }: { user: User; roomId: string; inviteCode: string; inviteLink: string; onLeave: () => void; onSignOut: () => void }) {
   const [connection, setConnection] = useState<'connecting' | 'connected' | 'error'>('connecting')
   const [localStream, setLocalStream] = useState<MediaStream | null>(null)
   const localStreamRef = useRef<MediaStream | null>(null)
@@ -301,7 +328,7 @@ function MeetingRoom({ user, roomId, onLeave, onSignOut }: { user: User; roomId:
     socketRef.current = nextSocket
     nextSocket.on('connect', () => {
       setConnection('connected')
-      nextSocket.emit('room:join', { roomId })
+      nextSocket.emit('room:join', { roomId, inviteCode })
     })
     nextSocket.on('connect_error', () => {
       setConnection('error')
@@ -358,7 +385,7 @@ function MeetingRoom({ user, roomId, onLeave, onSignOut }: { user: User; roomId:
       localStreamRef.current?.getTracks().forEach((track) => track.stop())
       screenStreamRef.current?.getTracks().forEach((track) => track.stop())
     }
-  }, [roomId, user.id, user.name])
+  }, [roomId, inviteCode, user.id, user.name])
 
   useEffect(() => {
     let disposed = false
@@ -480,11 +507,11 @@ function MeetingRoom({ user, roomId, onLeave, onSignOut }: { user: User; roomId:
 
   const copyInvite = async () => {
     try {
-      await navigator.clipboard.writeText(`${window.location.origin}/?room=${roomId}`)
+      await navigator.clipboard.writeText(`${inviteLink}\nMeeting invite code: ${inviteCode}`)
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1800)
     } catch {
-      setRoomNotice(`Room code: ${roomId}`)
+      setRoomNotice(`Invite link: ${inviteLink} · Invite code: ${inviteCode}`)
     }
   }
 
@@ -509,7 +536,7 @@ function MeetingRoom({ user, roomId, onLeave, onSignOut }: { user: User; roomId:
 
   return (
     <main className="meeting-shell">
-      <header className="meeting-topbar"><button className="meeting-back" onClick={leave}><ArrowLeft size={17} /><span>Back to home</span></button><div className="room-title"><span className="brand-mark"><Sparkles size={17} /></span><span className="room-name">Gather room</span><span className="room-divider">/</span><span className="room-code">{roomId}</span><button className="icon-button copy-room" onClick={copyInvite} title="Copy invite link">{copied ? <Check size={15} /> : <Copy size={15} />}</button></div><div className="meeting-status"><span className={`status-pip ${connection}`} />{connection === 'connected' ? 'Room is live' : connection === 'error' ? 'Reconnecting' : 'Connecting…'}<button className="user-menu" title="Sign out" onClick={onSignOut}><span className="avatar avatar-lilac">{initials(user.name)}</span></button></div></header>
+      <header className="meeting-topbar"><button className="meeting-back" onClick={leave}><ArrowLeft size={17} /><span>Back to home</span></button><div className="room-title"><span className="brand-mark"><Sparkles size={17} /></span><span className="room-name">Gather room</span><span className="room-divider">/</span><span className="room-code">Invite: {inviteCode}</span><button className="icon-button copy-room" onClick={copyInvite} title="Copy generated meeting link and invite code">{copied ? <Check size={15} /> : <Copy size={15} />}<span>{copied ? 'Copied' : 'Copy invite'}</span></button></div><div className="meeting-status"><span className={`status-pip ${connection}`} />{connection === 'connected' ? 'Room is live' : connection === 'error' ? 'Reconnecting' : 'Connecting…'}<button className="user-menu" title="Sign out" onClick={onSignOut}><span className="avatar avatar-lilac">{initials(user.name)}</span></button></div></header>
       {roomNotice && <div className="room-toast" role="status">{roomNotice}<button onClick={() => setRoomNotice('')} aria-label="Dismiss"><X size={15} /></button></div>}
       <div className="meeting-content">
         <section className={`stage ${panel ? 'stage-with-panel' : ''}`}>

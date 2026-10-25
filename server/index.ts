@@ -1,6 +1,6 @@
 import express from 'express'
 import { createServer } from 'node:http'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import path from 'node:path'
 import Database from 'better-sqlite3'
 import bcrypt from 'bcryptjs'
@@ -33,6 +33,7 @@ app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHe
 
 type SessionUser = { id: number; name: string; email: string }
 const tokenFor = (user: SessionUser) => jwt.sign(user, secret, { expiresIn: '7d' })
+const meetingRooms = new Map<string, { inviteCode: string; expiresAt: number }>()
 const cookieOptions = { httpOnly: true, sameSite: 'lax' as const, secure: process.env.NODE_ENV === 'production', path: '/', maxAge: 7 * 24 * 60 * 60 * 1000 }
 function session(req: express.Request): SessionUser | null {
   try { return jwt.verify(req.cookies?.gather_session, secret) as SessionUser } catch { return null }
@@ -66,6 +67,26 @@ app.post('/api/auth/login', async (req, res) => {
 app.get('/api/auth/me', requireUser, (_req, res) => res.json({ user: res.locals.user }))
 app.post('/api/auth/logout', (_req, res) => res.clearCookie('gather_session', { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', path: '/' }).json({ ok: true }))
 app.get('/api/health', (_req, res) => res.json({ ok: true }))
+const roomJoinLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 12, standardHeaders: true, legacyHeaders: false })
+app.post('/api/rooms', requireUser, (_req, res) => {
+  const now = Date.now()
+  for (const [id, room] of meetingRooms) if (room.expiresAt <= now) meetingRooms.delete(id)
+  const roomId = randomBytes(12).toString('base64url')
+  const inviteCode = randomBytes(6).toString('hex').toUpperCase()
+  meetingRooms.set(roomId, { inviteCode, expiresAt: now + 6 * 60 * 60 * 1000 })
+  const inviteLink = new URL('/', process.env.APP_ORIGIN ?? 'http://localhost:5173')
+  inviteLink.searchParams.set('room', roomId)
+  res.status(201).json({ roomId, inviteCode, inviteLink: inviteLink.toString() })
+})
+app.post('/api/rooms/join', requireUser, roomJoinLimiter, (req, res) => {
+  const parsed = z.object({ roomId: z.string().regex(/^[a-zA-Z0-9_-]{3,64}$/), inviteCode: z.string().regex(/^[a-fA-F0-9]{12}$/) }).safeParse(req.body)
+  if (!parsed.success) { res.status(400).json({ error: 'Enter a valid meeting link code and 12-character invite code.' }); return }
+  const room = meetingRooms.get(parsed.data.roomId)
+  const suppliedCode = Buffer.from(parsed.data.inviteCode.toUpperCase())
+  const validCode = room && room.expiresAt > Date.now() && timingSafeEqual(Buffer.from(room.inviteCode), suppliedCode)
+  if (!validCode) { res.status(403).json({ error: 'Invite code is incorrect or this meeting has ended.' }); return }
+  res.json({ ok: true })
+})
 
 const isMember = (conversationId: number, userId: number) => Boolean(db.prepare('SELECT 1 FROM conversation_members WHERE conversation_id = ? AND user_id = ?').get(conversationId, userId))
 const publicMessage = (id: number) => db.prepare('SELECT m.id, m.conversation_id AS conversationId, m.sender_id AS senderId, u.name AS senderName, m.body, m.created_at AS createdAt FROM messages m JOIN users u ON u.id = m.sender_id WHERE m.id = ?').get(id)
@@ -148,8 +169,14 @@ io.on('connection', (socket) => {
   })
   const activeRooms = new Set<string>()
   const validRoom = (roomId: unknown): roomId is string => typeof roomId === 'string' && roomPattern.test(roomId) && activeRooms.has(roomId)
-  socket.on('room:join', ({ roomId } = {}) => {
+  socket.on('room:join', ({ roomId, inviteCode } = {}) => {
     if (typeof roomId !== 'string' || !roomPattern.test(roomId)) { socket.emit('room:error', { error: 'That room code is not valid.' }); return }
+    const room = meetingRooms.get(roomId)
+    const suppliedCode = typeof inviteCode === 'string' && /^[a-fA-F0-9]{12}$/.test(inviteCode) ? Buffer.from(inviteCode.toUpperCase()) : Buffer.alloc(0)
+    if (!room || room.expiresAt <= Date.now() || suppliedCode.length !== 12 || !timingSafeEqual(Buffer.from(room.inviteCode), suppliedCode)) {
+      socket.emit('room:error', { error: 'Invite code is incorrect or this meeting has ended.' })
+      return
+    }
     if (activeRooms.has(roomId)) return
     const peers = [...(io.sockets.adapter.rooms.get(roomId) ?? [])].filter((id) => id !== socket.id).map((id) => ({ id: socketUsers.get(id)?.id ?? 0, name: socketUsers.get(id)?.name ?? 'Guest', socketId: id }))
     activeRooms.add(roomId)
