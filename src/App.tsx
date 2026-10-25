@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type PointerE
 import { io, type Socket } from 'socket.io-client'
 import {
   ArrowDownToLine, ArrowLeft, ArrowUpRight, Check, CheckCheck, Copy, FileText, Files,
-  Headphones, Link2, LogOut, MessageCircle, Mic, MicOff, MonitorUp, MoreHorizontal,
-  Paperclip, Pencil, Plus, Search, Send, ShieldCheck, Smile, Sparkles, Users, Video, VideoOff,
+  Headphones, Link2, LogOut, MessageCircle, Mic, MicOff, MonitorUp, MoreHorizontal, Moon,
+  Paperclip, Pencil, Plus, Search, Send, ShieldCheck, Smile, Sparkles, Sun, Users, Video, VideoOff,
   X, Phone, UserRoundPlus,
 } from 'lucide-react'
 import './App.css'
@@ -32,7 +32,13 @@ function initials(name: string) {
   return name.split(/\s+/).map((part) => part[0]).slice(0, 2).join('').toUpperCase()
 }
 
+function ThemeToggle({ theme, onToggle }: { theme: 'light' | 'dark'; onToggle: () => void }) {
+  const nextTheme = theme === 'light' ? 'dark' : 'light'
+  return <button type="button" className="theme-toggle" onClick={onToggle} title={`Switch to ${nextTheme} mode`} aria-label={`Switch to ${nextTheme} mode`}>{theme === 'light' ? <Moon size={17} /> : <Sun size={17} />}</button>
+}
+
 function App() {
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => window.localStorage.getItem('gather-theme') === 'dark' ? 'dark' : 'light')
   const [user, setUser] = useState<User | null>(null)
   const [authReady, setAuthReady] = useState(false)
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
@@ -44,6 +50,11 @@ function App() {
   const [inviteCode, setInviteCode] = useState('')
   const [joinInviteCode, setJoinInviteCode] = useState('')
   const [roomError, setRoomError] = useState('')
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    window.localStorage.setItem('gather-theme', theme)
+  }, [theme])
 
   useEffect(() => {
     request<{ user: User }>('/api/auth/me')
@@ -133,6 +144,7 @@ function App() {
           <div className="decor decor-one" /><div className="decor decor-two" />
         </section>
         <section className="auth-form-wrap">
+          <ThemeToggle theme={theme} onToggle={() => setTheme((current) => current === 'light' ? 'dark' : 'light')} />
           <form className="auth-form" onSubmit={authenticate}>
             <span className="eyebrow">YOUR SPACE IS READY</span>
             <h2>{authMode === 'login' ? 'Welcome back' : 'Create your account'}</h2>
@@ -151,12 +163,12 @@ function App() {
     )
   }
 
-  if (roomId) return <MeetingRoom user={user} roomId={roomId} inviteCode={inviteCode} inviteLink={inviteLink} onLeave={() => setRoomId('')} onSignOut={signOut} />
+  if (roomId) return <MeetingRoom user={user} roomId={roomId} inviteCode={inviteCode} inviteLink={inviteLink} theme={theme} onToggleTheme={() => setTheme((current) => current === 'light' ? 'dark' : 'light')} onLeave={() => setRoomId('')} onSignOut={signOut} />
 
-  return <Messenger user={user} onSignOut={signOut} onStartCall={createRoom} onJoinRoom={joinRoom} joinCode={joinCode} setJoinCode={setJoinCode} joinInviteCode={joinInviteCode} setJoinInviteCode={setJoinInviteCode} roomError={roomError} />
+  return <Messenger user={user} onSignOut={signOut} onStartCall={createRoom} onJoinRoom={joinRoom} joinCode={joinCode} setJoinCode={setJoinCode} joinInviteCode={joinInviteCode} setJoinInviteCode={setJoinInviteCode} roomError={roomError} theme={theme} onToggleTheme={() => setTheme((current) => current === 'light' ? 'dark' : 'light')} />
 }
 
-function Messenger({ user, onSignOut, onStartCall, onJoinRoom, joinCode, setJoinCode, joinInviteCode, setJoinInviteCode, roomError }: {
+function Messenger({ user, onSignOut, onStartCall, onJoinRoom, joinCode, setJoinCode, joinInviteCode, setJoinInviteCode, roomError, theme, onToggleTheme }: {
   user: User
   onSignOut: () => void
   onStartCall: () => void
@@ -166,6 +178,8 @@ function Messenger({ user, onSignOut, onStartCall, onJoinRoom, joinCode, setJoin
   joinInviteCode: string
   setJoinInviteCode: (code: string) => void
   roomError: string
+  theme: 'light' | 'dark'
+  onToggleTheme: () => void
 }) {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [activeId, setActiveId] = useState<number | null>(null)
@@ -278,7 +292,7 @@ function Messenger({ user, onSignOut, onStartCall, onJoinRoom, joinCode, setJoin
       <aside className="messenger-sidebar">
         <header className="messenger-profile">
           <div className="messenger-brand"><span className="brand-mark"><Sparkles size={17} /></span><span>gather</span></div>
-          <div className="profile-actions"><button className="messenger-icon" title="Start a meeting" onClick={onStartCall}><Video size={19} /></button><button className="messenger-icon" title="Sign out" onClick={onSignOut}><LogOut size={17} /></button><span className="profile-avatar" title={user.name}>{initials(user.name)}</span></div>
+          <div className="profile-actions"><ThemeToggle theme={theme} onToggle={onToggleTheme} /><button className="messenger-icon" title="Start a meeting" onClick={onStartCall}><Video size={19} /></button><button className="messenger-icon" title="Sign out" onClick={onSignOut}><LogOut size={17} /></button><span className="profile-avatar" title={user.name}>{initials(user.name)}</span></div>
         </header>
         <div className="messenger-search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search or start a new chat" aria-label="Search people" />{query && <button onClick={() => setQuery('')} aria-label="Clear search"><X size={15} /></button>}</div>
         <div className="messenger-list-title"><span>{query.trim().length >= 2 ? 'PEOPLE' : 'CHATS'}</span><button title="Start a new chat" onClick={() => document.querySelector<HTMLInputElement>('.messenger-search input')?.focus()}><UserRoundPlus size={17} /></button></div>
@@ -299,7 +313,7 @@ function Messenger({ user, onSignOut, onStartCall, onJoinRoom, joinCode, setJoin
   )
 }
 
-function MeetingRoom({ user, roomId, inviteCode, inviteLink, onLeave, onSignOut }: { user: User; roomId: string; inviteCode: string; inviteLink: string; onLeave: () => void; onSignOut: () => void }) {
+function MeetingRoom({ user, roomId, inviteCode, inviteLink, theme, onToggleTheme, onLeave, onSignOut }: { user: User; roomId: string; inviteCode: string; inviteLink: string; theme: 'light' | 'dark'; onToggleTheme: () => void; onLeave: () => void; onSignOut: () => void }) {
   const [connection, setConnection] = useState<'connecting' | 'connected' | 'error'>('connecting')
   const [localStream, setLocalStream] = useState<MediaStream | null>(null)
   const localStreamRef = useRef<MediaStream | null>(null)
@@ -536,7 +550,7 @@ function MeetingRoom({ user, roomId, inviteCode, inviteLink, onLeave, onSignOut 
 
   return (
     <main className="meeting-shell">
-      <header className="meeting-topbar"><button className="meeting-back" onClick={leave}><ArrowLeft size={17} /><span>Back to home</span></button><div className="room-title"><span className="brand-mark"><Sparkles size={17} /></span><span className="room-name">Gather room</span><span className="room-divider">/</span><span className="room-code">Invite: {inviteCode}</span><button className="icon-button copy-room" onClick={copyInvite} title="Copy generated meeting link and invite code">{copied ? <Check size={15} /> : <Copy size={15} />}<span>{copied ? 'Copied' : 'Copy invite'}</span></button></div><div className="meeting-status"><span className={`status-pip ${connection}`} />{connection === 'connected' ? 'Room is live' : connection === 'error' ? 'Reconnecting' : 'Connecting…'}<button className="user-menu" title="Sign out" onClick={onSignOut}><span className="avatar avatar-lilac">{initials(user.name)}</span></button></div></header>
+      <header className="meeting-topbar"><button className="meeting-back" onClick={leave}><ArrowLeft size={17} /><span>Back to home</span></button><div className="room-title"><span className="brand-mark"><Sparkles size={17} /></span><span className="room-name">Gather room</span><span className="room-divider">/</span><span className="room-code">Invite: {inviteCode}</span><button className="icon-button copy-room" onClick={copyInvite} title="Copy generated meeting link and invite code">{copied ? <Check size={15} /> : <Copy size={15} />}<span>{copied ? 'Copied' : 'Copy invite'}</span></button></div><div className="meeting-status"><ThemeToggle theme={theme} onToggle={onToggleTheme} /><span className={`status-pip ${connection}`} />{connection === 'connected' ? 'Room is live' : connection === 'error' ? 'Reconnecting' : 'Connecting…'}<button className="user-menu" title="Sign out" onClick={onSignOut}><span className="avatar avatar-lilac">{initials(user.name)}</span></button></div></header>
       {roomNotice && <div className="room-toast" role="status">{roomNotice}<button onClick={() => setRoomNotice('')} aria-label="Dismiss"><X size={15} /></button></div>}
       <div className="meeting-content">
         <section className={`stage ${panel ? 'stage-with-panel' : ''}`}>
