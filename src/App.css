@@ -156,3 +156,24 @@
 [data-theme="dark"] .emoji-categories button.selected,[data-theme="dark"] .emoji-categories button:hover{background:#3a3153;color:#c0b5ff}
 [data-theme="dark"] .emoji-no-results{color:#aaa4b4}
 @media(max-width:700px){.emoji-picker{left:8px;max-height:min(430px,65vh)}}
+.attachment-input{display:none!important}
+.attachment-preview{display:flex;align-items:center;gap:9px;margin:0 18px 8px;padding:8px 10px;border:1px solid #e7e4eb;border-radius:9px;background:#f0edff;color:#6049d8}
+.attachment-preview>span{min-width:0;flex:1}
+.attachment-preview b,.attachment-preview small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attachment-preview b{font-size:10px;color:#24222a}
+.attachment-preview small{margin-top:3px;font-size:9px;color:#777282}
+.attachment-preview button{width:27px;height:27px;display:grid;place-items:center;border:0;border-radius:7px;background:transparent;color:#777282}
+.attachment-preview button:hover{background:#e4ddff;color:#6049d8}
+.message-attachment{max-width:100%;display:flex;align-items:center;gap:9px;margin:0 0 6px;padding:9px;border:1px solid #e7e4eb;border-radius:8px;background:#faf9f7;color:#6049d8;text-decoration:none}
+.message-attachment>span{min-width:0;flex:1}
+.message-attachment b,.message-attachment small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.message-attachment b{font-size:10px;color:#24222a}
+.message-attachment small{margin-top:3px;font-size:9px;color:#777282}
+.message-attachment:hover{border-color:#bca9ff;background:#f5f2ff}
+[data-theme="dark"] .attachment-preview{background:#312a45;border-color:#494257;color:#c0b5ff}
+[data-theme="dark"] .attachment-preview b,[data-theme="dark"] .message-attachment b{color:#f4f1fa}
+[data-theme="dark"] .attachment-preview small,[data-theme="dark"] .message-attachment small{color:#aaa4b4}
+[data-theme="dark"] .attachment-preview button{color:#b5afc1}
+[data-theme="dark"] .attachment-preview button:hover{background:#3a3153;color:#c0b5ff}
+[data-theme="dark"] .message-attachment{background:#211e29;border-color:#494257;color:#c0b5ff}
+[data-theme="dark"] .message-attachment:hover{background:#312a45;border-color:#655a82}

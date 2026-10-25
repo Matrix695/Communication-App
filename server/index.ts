@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEX
 CREATE TABLE IF NOT EXISTS conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL CHECK(kind IN ('dm','group')), name TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS conversation_members (conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, last_read_at TEXT, PRIMARY KEY(conversation_id,user_id));
 CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, sender_id INTEGER NOT NULL REFERENCES users(id), body TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS message_attachments (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id INTEGER NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE, name TEXT NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL);
 CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages(conversation_id,id DESC);
 `)
 
@@ -27,7 +28,8 @@ const app = express()
 const httpServer = createServer(app)
 const io = new Server(httpServer, { maxHttpBufferSize: 5e6, cors: { origin: process.env.APP_ORIGIN ?? 'http://localhost:5173', credentials: true } })
 app.use(helmet({ crossOriginEmbedderPolicy: false }))
-app.use(express.json({ limit: '64kb' }))
+const smallJson = express.json({ limit: '64kb' })
+app.use((req, res, next) => req.path.endsWith('/attachments') ? next() : smallJson(req, res, next))
 app.use(cookieParser())
 app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false }))
 
@@ -89,7 +91,12 @@ app.post('/api/rooms/join', requireUser, roomJoinLimiter, (req, res) => {
 })
 
 const isMember = (conversationId: number, userId: number) => Boolean(db.prepare('SELECT 1 FROM conversation_members WHERE conversation_id = ? AND user_id = ?').get(conversationId, userId))
-const publicMessage = (id: number) => db.prepare('SELECT m.id, m.conversation_id AS conversationId, m.sender_id AS senderId, u.name AS senderName, m.body, m.created_at AS createdAt FROM messages m JOIN users u ON u.id = m.sender_id WHERE m.id = ?').get(id)
+const publicMessage = (id: number) => {
+  const row = db.prepare(`SELECT m.id,m.conversation_id AS conversationId,m.sender_id AS senderId,u.name AS senderName,m.body,m.created_at AS createdAt,
+    (SELECT json_object('id',a.id,'name',a.name,'size',a.size) FROM message_attachments a WHERE a.message_id=m.id) AS attachment
+    FROM messages m JOIN users u ON u.id=m.sender_id WHERE m.id=?`).get(id) as ({ attachment: string | null } & Record<string, unknown>) | undefined
+  return row ? { ...row, attachment: row.attachment ? JSON.parse(row.attachment) : null } : null
+}
 app.get('/api/users', requireUser, (req, res) => {
   const user = res.locals.user as SessionUser
   const query = String(req.query.q ?? '').trim().slice(0, 80)
@@ -130,9 +137,47 @@ app.get('/api/conversations/:id/messages', requireUser, (req, res) => {
   const user = res.locals.user as SessionUser
   const id = Number(req.params.id)
   if (!Number.isSafeInteger(id) || !isMember(id,user.id)) { res.status(404).json({ error: 'Conversation not found.' }); return }
-  const messages = db.prepare(`SELECT m.id,m.conversation_id AS conversationId,m.sender_id AS senderId,u.name AS senderName,m.body,m.created_at AS createdAt FROM messages m JOIN users u ON u.id=m.sender_id WHERE m.conversation_id=? ORDER BY m.id DESC LIMIT 100`).all(id).reverse()
+  const messages = db.prepare(`SELECT m.id,m.conversation_id AS conversationId,m.sender_id AS senderId,u.name AS senderName,m.body,m.created_at AS createdAt,
+    (SELECT json_object('id',a.id,'name',a.name,'size',a.size) FROM message_attachments a WHERE a.message_id=m.id) AS attachment
+    FROM messages m JOIN users u ON u.id=m.sender_id WHERE m.conversation_id=? ORDER BY m.id DESC LIMIT 100`).all(id).reverse().map((row) => {
+      const item = row as { attachment: string | null } & Record<string, unknown>
+      return { ...item, attachment: item.attachment ? JSON.parse(item.attachment) : null }
+    })
   db.prepare('UPDATE conversation_members SET last_read_at=CURRENT_TIMESTAMP WHERE conversation_id=? AND user_id=?').run(id,user.id)
   res.json({ messages })
+})
+const attachmentUploadLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false })
+app.post('/api/conversations/:id/attachments', requireUser, attachmentUploadLimiter, express.json({ limit: '4.5mb' }), (req, res) => {
+  const user = res.locals.user as SessionUser
+  const id = Number(req.params.id)
+  const parsed = z.object({ name: z.string().trim().min(1).max(180), data: z.string().min(4).max(4_194_304).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/), caption: z.string().trim().max(4000).optional() }).safeParse(req.body)
+  if (!Number.isSafeInteger(id) || !isMember(id,user.id)) { res.status(404).json({ error: 'Conversation not found.' }); return }
+  if (!parsed.success) { res.status(400).json({ error: 'Choose a file up to 3 MB and use a caption under 4,000 characters.' }); return }
+  const data = Buffer.from(parsed.data.data, 'base64')
+  if (!data.length || data.length > 3 * 1024 * 1024) { res.status(400).json({ error: 'Choose a file up to 3 MB.' }); return }
+  const name = parsed.data.name.replace(/[\\/]/g, '_')
+  const create = db.transaction(() => {
+    const result = db.prepare('INSERT INTO messages(conversation_id,sender_id,body) VALUES (?,?,?)').run(id,user.id,parsed.data.caption || `Shared a file: ${name}`)
+    db.prepare('INSERT INTO message_attachments(message_id,name,size,data) VALUES (?,?,?,?)').run(result.lastInsertRowid,name,data.length,data)
+    db.prepare('UPDATE conversation_members SET last_read_at=CURRENT_TIMESTAMP WHERE conversation_id=? AND user_id=?').run(id,user.id)
+    return publicMessage(Number(result.lastInsertRowid))
+  })
+  const message = create()
+  io.to(`conversation:${id}`).emit('message:new', message)
+  res.status(201).json({ message })
+})
+app.get('/api/attachments/:id', requireUser, (req, res) => {
+  const user = res.locals.user as SessionUser
+  const attachment = db.prepare(`SELECT a.name,a.size,a.data FROM message_attachments a
+    JOIN messages m ON m.id=a.message_id JOIN conversation_members cm ON cm.conversation_id=m.conversation_id
+    WHERE a.id=? AND cm.user_id=?`).get(Number(req.params.id),user.id) as { name: string; size: number; data: Buffer } | undefined
+  if (!attachment) { res.status(404).json({ error: 'File not found.' }); return }
+  res.setHeader('Content-Type', 'application/octet-stream')
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(attachment.name)}`)
+  res.setHeader('Content-Length', attachment.size)
+  res.setHeader('Cache-Control', 'private, no-store')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.send(attachment.data)
 })
 app.post('/api/conversations/:id/messages', requireUser, (req, res) => {
   const user = res.locals.user as SessionUser

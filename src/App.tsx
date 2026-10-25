@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type PointerEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent, type PointerEvent } from 'react'
 import { io, type Socket } from 'socket.io-client'
 import {
   ArrowDownToLine, ArrowLeft, ArrowUpRight, Check, CheckCheck, Copy, Eye, EyeOff, FileText, Files,
@@ -15,11 +15,21 @@ type SharedFile = { id: string; name: string; type: string; size: number; data: 
 type Point = { x: number; y: number }
 type Stroke = { id: string; color: string; points: Point[] }
 type RoomSignal = { from: string; signal: RTCSessionDescriptionInit | RTCIceCandidateInit }
-type DirectMessage = { id: number; conversationId: number; senderId: number; senderName: string; body: string; createdAt: string }
+type DirectAttachment = { id: number; name: string; size: number }
+type DirectMessage = { id: number; conversationId: number; senderId: number; senderName: string; body: string; createdAt: string; attachment?: DirectAttachment | null }
 type Conversation = { id: number; kind: 'dm' | 'group'; name: string | null; peers: User[]; lastMessage: string | null; lastMessageAt: string | null; unread: number }
 
 const ICE_SERVERS: RTCConfiguration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
 const FILE_LIMIT = 3 * 1024 * 1024
+
+function fileToBase64(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result.slice(reader.result.indexOf(',') + 1)) : reject(new Error('Unable to read file.'))
+    reader.onerror = () => reject(new Error('Unable to read file.'))
+    reader.readAsDataURL(file)
+  })
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { credentials: 'include', ...init })
@@ -30,6 +40,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 function initials(name: string) {
   return name.split(/\s+/).map((part) => part[0]).slice(0, 2).join('').toUpperCase()
+}
+
+function formatFileSize(bytes: number) {
+  return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 const emojiCategories = [
@@ -209,6 +223,7 @@ function Messenger({ user, onSignOut, onStartCall, onJoinRoom, joinCode, setJoin
   const [messages, setMessages] = useState<DirectMessage[]>([])
   const [text, setText] = useState('')
   const [emojiOpen, setEmojiOpen] = useState(false)
+  const [attachmentFile, setAttachmentFile] = useState<File | null>(null)
   const [query, setQuery] = useState('')
   const [contacts, setContacts] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
@@ -216,6 +231,7 @@ function Messenger({ user, onSignOut, onStartCall, onJoinRoom, joinCode, setJoin
   const [error, setError] = useState('')
   const [mobileChatOpen, setMobileChatOpen] = useState(false)
   const [socket, setSocket] = useState<Socket | null>(null)
+  const attachmentInputRef = useRef<HTMLInputElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const activeConversation = conversations.find((item) => item.id === activeId) ?? null
   const activePeer = activeConversation?.peers[0]
@@ -292,25 +308,40 @@ function Messenger({ user, onSignOut, onStartCall, onJoinRoom, joinCode, setJoin
 
   const sendMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (activeId === null || !text.trim() || busy) return
+    if (activeId === null || (!text.trim() && !attachmentFile) || busy) return
     const body = text.trim()
+    const file = attachmentFile
     setText('')
+    setAttachmentFile(null)
     setEmojiOpen(false)
     setBusy(true)
     try {
-      const result = await request<{ message: DirectMessage }>(`/api/conversations/${activeId}/messages`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }),
-      })
+      const result = file
+        ? await request<{ message: DirectMessage }>(`/api/conversations/${activeId}/attachments`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: file.name, data: await fileToBase64(file), caption: body }),
+        })
+        : await request<{ message: DirectMessage }>(`/api/conversations/${activeId}/messages`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }),
+        })
       setMessages((current) => current.some((item) => item.id === result.message.id) ? current : [...current, result.message])
       await refreshConversations()
     } catch (cause) {
       setText(body)
+      setAttachmentFile(file)
       setError(cause instanceof Error ? cause.message : 'Message could not be sent.')
     } finally { setBusy(false) }
   }
 
   const conversationName = (item: Conversation) => item.name || item.peers.map((peer) => peer.name).join(', ') || 'New chat'
   const timeLabel = (value: string | null) => value ? new Date(`${value.replace(' ', 'T')}Z`).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''
+  const selectAttachment = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0]
+    event.currentTarget.value = ''
+    if (!file) return
+    if (!file.size || file.size > FILE_LIMIT) { setError('Choose a file between 1 byte and 3 MB.'); return }
+    setError('')
+    setAttachmentFile(file)
+  }
 
   return (
     <main className={`messenger-app ${mobileChatOpen ? 'chat-open' : ''}`}>
@@ -329,8 +360,8 @@ function Messenger({ user, onSignOut, onStartCall, onJoinRoom, joinCode, setJoin
       <section className="messenger-main">
         {activeConversation && activePeer ? <>
           <header className="active-chat-header"><button className="mobile-back" onClick={() => setMobileChatOpen(false)} aria-label="Back to chats"><ArrowLeft size={19} /></button><span className="conversation-avatar">{initials(activePeer.name)}</span><div className="active-chat-name"><b>{activePeer.name}</b><small>{activePeer.email}</small></div><div className="active-chat-actions"><button className="messenger-icon" title="Start a video meeting" onClick={onStartCall}><Video size={19} /></button><button className="messenger-icon" title="Start a voice meeting" onClick={onStartCall}><Phone size={18} /></button><button className="messenger-icon" title="Search in conversation" onClick={() => document.querySelector<HTMLInputElement>('.messenger-search input')?.focus()}><Search size={18} /></button></div></header>
-          <div className="message-history"><div className="message-day-label"><span>MESSAGES ARE PRIVATE TO THIS CHAT</span></div>{messages.length === 0 ? <div className="chat-empty"><span className="empty-art"><MessageCircle size={23} /></span><b>Start a conversation with {activePeer.name}</b><small>Messages are saved and sync live while you’re here.</small></div> : messages.map((item) => <article key={item.id} className={`message-bubble ${item.senderId === user.id ? 'mine' : ''}`}><p>{item.body}</p><footer><time>{timeLabel(item.createdAt)}</time>{item.senderId === user.id && <CheckCheck size={14} />}</footer></article>)}<div ref={bottomRef} /></div>
-          <div className="message-composer-wrap">{emojiOpen && <EmojiPicker onSelect={(emoji) => setText((value) => `${value}${emoji}`)} onClose={() => setEmojiOpen(false)} />}<form className="message-composer" onSubmit={sendMessage}><button type="button" className="composer-icon" title="Emoji" aria-label="Open emoji picker" aria-expanded={emojiOpen} onClick={() => setEmojiOpen((open) => !open)}><Smile size={22} /></button><button type="button" className="composer-icon" title="Start a meeting" onClick={onStartCall}><Paperclip size={21} /></button><input value={text} onChange={(event) => setText(event.target.value)} placeholder="Type a message" aria-label="Type a message" maxLength={4000} /><button className="send-message" aria-label="Send message" disabled={!text.trim() || busy}><Send size={18} /></button></form></div>
+          <div className="message-history"><div className="message-day-label"><span>MESSAGES ARE PRIVATE TO THIS CHAT</span></div>{messages.length === 0 ? <div className="chat-empty"><span className="empty-art"><MessageCircle size={23} /></span><b>Start a conversation with {activePeer.name}</b><small>Messages are saved and sync live while you’re here.</small></div> : messages.map((item) => <article key={item.id} className={`message-bubble ${item.senderId === user.id ? 'mine' : ''}`}>{item.attachment && <a className="message-attachment" href={`/api/attachments/${item.attachment.id}`} download={item.attachment.name}><FileText size={18} /><span><b>{item.attachment.name}</b><small>{formatFileSize(item.attachment.size)}</small></span><ArrowDownToLine size={16} /></a>}{(!item.attachment || item.body !== `Shared a file: ${item.attachment.name}`) && <p>{item.body}</p>}<footer><time>{timeLabel(item.createdAt)}</time>{item.senderId === user.id && <CheckCheck size={14} />}</footer></article>)}<div ref={bottomRef} /></div>
+          <div className="message-composer-wrap">{emojiOpen && <EmojiPicker onSelect={(emoji) => setText((value) => `${value}${emoji}`)} onClose={() => setEmojiOpen(false)} />}{attachmentFile && <div className="attachment-preview"><FileText size={17} /><span><b>{attachmentFile.name}</b><small>{formatFileSize(attachmentFile.size)} · Ready to send</small></span><button type="button" onClick={() => setAttachmentFile(null)} aria-label="Remove attachment"><X size={15} /></button></div>}<input ref={attachmentInputRef} className="attachment-input" type="file" onChange={selectAttachment} /><form className="message-composer" onSubmit={sendMessage}><button type="button" className="composer-icon" title="Emoji" aria-label="Open emoji picker" aria-expanded={emojiOpen} onClick={() => setEmojiOpen((open) => !open)}><Smile size={22} /></button><button type="button" className="composer-icon" title="Add files" aria-label="Add files" onClick={() => attachmentInputRef.current?.click()}><Paperclip size={21} /></button><input value={text} onChange={(event) => setText(event.target.value)} placeholder="Type a message" aria-label="Type a message" maxLength={4000} /><button className="send-message" aria-label="Send message" disabled={(!text.trim() && !attachmentFile) || busy}><Send size={18} /></button></form></div>
         </> : <div className="messenger-welcome"><div className="welcome-art"><MessageCircle size={51} /><span><CheckCheck size={18} /></span></div><h1>Keep the conversation going</h1><p>Choose a chat or find someone to message. Start a meeting whenever you want to talk face to face.</p><div className="welcome-rule" /><small><ShieldCheck size={14} /> Your chats stay connected to your account</small></div>}
         {error && <div className="messenger-error" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss"><X size={15} /></button></div>}
       </section>
